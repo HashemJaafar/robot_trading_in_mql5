@@ -1,0 +1,256 @@
+//+------------------------------------------------------------------+
+//|                                                      ProjectName |
+//|                                      Copyright 2020, CompanyName |
+//|                                       http://www.companyname.net |
+//+------------------------------------------------------------------+
+#include<Trade\Trade.mqh>
+CTrade trade;
+int direction=1;
+input double               ATRProfit=2;
+input double               ATRLoss=1;
+input int                  TotalTrade=1;
+input double               Risk=0.01;
+input double               DecreaseRisk=0;
+input uint                 MaximumConsecutiveWins=4;
+input double               BaseConsecutiveWins=1.96;
+input int                  MinimumConsecutiveWinsToResetRisk=2;
+input bool                 ExponentialGrowthRisk=true;
+input bool                 ChangeDirection=true;
+input bool                 Trailing=true;
+input bool                 ExitIndicator=true;
+input bool                 ExitInProfit=true;
+input double               SecureTheDeal=1;
+input double               SecureTheProfit=0;
+input group "ATR"
+input ENUM_TIMEFRAMES      ATR_Period=PERIOD_CURRENT;
+input int                  ATR_ma_Period=14;
+input group "ADX"
+input ENUM_TIMEFRAMES      ADX_Period=PERIOD_CURRENT;
+input int                  adx_Period=14;
+input group "MAADX"
+input ENUM_TIMEFRAMES      MAADX_Period=PERIOD_CURRENT;
+input int                  adx_ma_Period=10;
+input int                  adx_ma_shift=0;
+input ENUM_MA_METHOD       adx_ma_method=MODE_SMA;
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int ATR=iATR(_Symbol,ATR_Period,ATR_ma_Period);
+int ADX=iADX(_Symbol,ADX_Period,adx_Period);
+int MAADX=iMA(_Symbol,MAADX_Period,adx_ma_Period,adx_ma_shift,adx_ma_method,ADX);
+void OnTick()
+{
+ double ATRA[];
+ double MAIN_LINEA[];
+ double PLUSDI_LINEA[];
+ double MINUSDI_LINEA[];
+ double MAADXA[];
+
+ ArraySetAsSeries(ATRA,true);
+ ArraySetAsSeries(MAIN_LINEA,true);
+ ArraySetAsSeries(PLUSDI_LINEA,true);
+ ArraySetAsSeries(MINUSDI_LINEA,true);
+ ArraySetAsSeries(MAADXA,true);
+
+ CopyBuffer(ATR,0,0,10,ATRA);
+ CopyBuffer(ADX,0,0,10,MAIN_LINEA);
+ CopyBuffer(ADX,1,0,10,PLUSDI_LINEA);
+ CopyBuffer(ADX,2,0,10,MINUSDI_LINEA);
+ CopyBuffer(MAADX,0,0,10,MAADXA);
+
+ string signal;
+ string CloseAllBUY;
+ string CloseAllSELL;
+ static double LastTrailingBuy;
+ static double LastTrailingSell;
+ double Ask=NormalizeDouble(SymbolInfoDouble(_Symbol,SYMBOL_ASK),_Digits);
+ double Bid=NormalizeDouble(SymbolInfoDouble(_Symbol,SYMBOL_BID),_Digits);
+ bool x=false;
+ if(ConsecutiveTrade()<MinimumConsecutiveWinsToResetRisk)
+  x=true;
+ double risk=Risk*pow(DecreaseRisk,x)*pow(pow(ConsecutiveTrade()-MinimumConsecutiveWinsToResetRisk,1-ExponentialGrowthRisk)*pow(pow(BaseConsecutiveWins,ExponentialGrowthRisk),ConsecutiveTrade()-MinimumConsecutiveWinsToResetRisk),1-x);
+ double PipValue=(((SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE))*_Point)/(SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE)));
+ double lot=floor((risk*AccountInfoDouble(ACCOUNT_BALANCE)/(PipValue*ATRA[0]*ATRLoss/_Point))*100)/100;
+ if(lot==0)
+  lot=0.01;
+ Comment("Best BaseConsecutiveWins",100*(1-(1/(1+0.01*(ATRProfit/ATRLoss)))));
+
+ if(PLUSDI_LINEA[1]>MINUSDI_LINEA[1] && PLUSDI_LINEA[2]<MINUSDI_LINEA[2] && MAIN_LINEA[1]>MAADXA[1])
+  signal="buy";
+ if(PLUSDI_LINEA[1]<MINUSDI_LINEA[1] && PLUSDI_LINEA[2]>MINUSDI_LINEA[2] && MAIN_LINEA[1]>MAADXA[1])
+  signal="sell";
+
+ while(ChangeDirection==true && LastProfit()<0 && PositionsForThisCurrencyPair()<TotalTrade && (signal=="buy" || signal=="sell"))
+ {
+  if(direction==2)
+   direction=0;
+  direction++;
+  break;
+ }
+
+ if(direction==1)
+ {
+  if(signal=="buy" && CloseAllBUY!="Exit" && PositionsForThisCurrencyPair()<TotalTrade)
+  {
+   trade.Buy(lot,NULL,Ask,(Ask-ATRA[0]*ATRLoss),(Ask+ATRA[0]*ATRProfit),direction);
+   LastTrailingBuy=0;
+  }
+  if(signal=="sell" && CloseAllSELL!="Exit" && PositionsForThisCurrencyPair()<TotalTrade)
+  {
+   trade.Sell(lot,NULL,Bid,(Bid+ATRA[0]*ATRLoss),(Bid-ATRA[0]*ATRProfit),direction);
+   LastTrailingSell=1000;
+  }
+ }
+
+ if(direction==2)
+ {
+  if(signal=="buy" && CloseAllBUY!="Exit" && PositionsForThisCurrencyPair()<TotalTrade)
+  {
+   trade.Sell(lot,NULL,Bid,(Bid+ATRA[0]*ATRLoss),(Bid-ATRA[0]*ATRProfit),direction);
+   LastTrailingSell=1000;
+  }
+  if(signal=="sell" && CloseAllSELL!="Exit" && PositionsForThisCurrencyPair()<TotalTrade)
+  {
+   trade.Buy(lot,NULL,Ask,(Ask-ATRA[0]*ATRLoss),(Ask+ATRA[0]*ATRProfit),direction);
+   LastTrailingBuy=0;
+  }
+ }
+
+ if(ExitIndicator==true && ExitInProfit*PositionGetDouble(POSITION_PROFIT)>=0)
+ {
+  if(PLUSDI_LINEA[1]<MINUSDI_LINEA[1])
+  {
+   CloseAllBUYPositions();
+   CloseAllBUY="Exit";
+  }
+  if(PLUSDI_LINEA[1]>MINUSDI_LINEA[1])
+  {
+   CloseAllSELLPositions();
+   CloseAllSELL="Exit";
+  }
+ }
+
+ if(Trailing==true)
+ {
+  double TrailingBuy=(Ask-ATRA[0]*ATRLoss);
+  if(TrailingBuy<Bid && TrailingBuy>LastTrailingBuy)
+  {
+   CheckTrailingBuy(Ask,TrailingBuy);
+   LastTrailingBuy=TrailingBuy;
+  }
+  double TrailingSell=(Bid+ATRA[0]*ATRLoss);
+  if(TrailingSell>Ask && TrailingSell<LastTrailingSell)
+  {
+   CheckTrailingSell(Bid,TrailingSell);
+   LastTrailingSell=TrailingSell;
+  }
+ }
+
+ CheckSecureTheDeal();
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CloseAllBUYPositions()
+{
+ for(int i=PositionsTotal()-1; i>=0; i--)
+  if(_Symbol==PositionGetSymbol(i))
+   if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+    trade.PositionClose(PositionGetTicket(i));
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CloseAllSELLPositions()
+{
+ for(int i=PositionsTotal()-1; i>=0; i--)
+  if(_Symbol==PositionGetSymbol(i))
+   if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_SELL)
+    trade.PositionClose(PositionGetTicket(i));
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CheckTrailingBuy(double Ask,double TrailingBuy)
+{
+ for(int i=PositionsTotal()-1; i>=0; i--)
+  if(_Symbol==PositionGetSymbol(i))
+  {
+   double SL=PositionGetDouble(POSITION_SL);
+   if((SL<TrailingBuy)||(SL==0))
+    trade.PositionModify(PositionGetTicket(i),TrailingBuy,PositionGetDouble(POSITION_TP));
+  }
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CheckTrailingSell(double Bid,double TrailingSell)
+{
+ for(int i=PositionsTotal()-1; i>=0; i--)
+  if(_Symbol==PositionGetSymbol(i))
+  {
+   double SL=PositionGetDouble(POSITION_SL);
+   if((SL>TrailingSell)||(SL==0))
+    trade.PositionModify(PositionGetTicket(i),TrailingSell,PositionGetDouble(POSITION_TP));
+  }
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CheckSecureTheDeal()
+{
+ for(int i=PositionsTotal()-1; i>=0; i--)
+  if(_Symbol==PositionGetSymbol(i))
+  {
+   double TP=PositionGetDouble(POSITION_TP);
+   double PriceCurrent=PositionGetDouble(POSITION_PRICE_CURRENT);
+   double PriceOpen=PositionGetDouble(POSITION_PRICE_OPEN);
+   if((PriceCurrent>PriceOpen+((TP-PriceOpen)*SecureTheDeal) && PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+      || (PriceCurrent<PriceOpen+((TP-PriceOpen)*SecureTheDeal) && PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_SELL))
+    trade.PositionModify(PositionGetTicket(i),PriceOpen+((TP-PriceOpen)*SecureTheProfit),TP);
+  }
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double LastProfit()
+{
+ double LastProfit=0;
+ HistorySelect(0,TimeCurrent());
+ for(int i=0; i<HistoryDealsTotal()-PositionsTotal(); i++)
+  LastProfit=HistoryDealGetDouble(HistoryDealGetTicket(i),DEAL_PROFIT);
+ return LastProfit;
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int ConsecutiveTrade()
+{
+ double ConsecutiveWins=0;
+ for(int i=HistoryDealsTotal()-PositionsTotal(); i>=0; i--)
+ {
+  if(HistoryDealGetDouble(HistoryDealGetTicket(i),DEAL_PROFIT)<0 || ConsecutiveWins>MaximumConsecutiveWins+MinimumConsecutiveWinsToResetRisk)
+   break;
+  ConsecutiveWins+=0.5;
+ }
+ double ConsecutiveLosses=0;
+ for(int i=HistoryDealsTotal()-PositionsTotal(); i>=0; i--)
+ {
+  if(HistoryDealGetDouble(HistoryDealGetTicket(i),DEAL_PROFIT)>0)
+   break;
+  ConsecutiveLosses+=0.5;
+ }
+ return ConsecutiveWins-ConsecutiveLosses;
+}
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int PositionsForThisCurrencyPair()
+{
+ int PositionsForThisCurrencyPair=0;
+ for(int i=PositionsTotal(); i>=0; i--)
+  if(_Symbol==PositionGetSymbol(i))
+   PositionsForThisCurrencyPair++;
+ return PositionsForThisCurrencyPair;
+}
+//+------------------------------------------------------------------+
